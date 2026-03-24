@@ -21,6 +21,15 @@ namespace VRCSim
         private static readonly List<VRCPlayerApi> _bots = new();
         private static bool _ready;
 
+        // Reset static state when entering play mode to avoid stale refs
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+        private static void OnPlayModeEnter()
+        {
+            _ready = false;
+            _bots.Clear();
+            SimReflection.Reset();
+        }
+
         // ── Initialization ─────────────────────────────────────────
 
         /// <summary>
@@ -57,7 +66,7 @@ namespace VRCSim
 
             if (VRCPlayerApi.AllPlayers.Count <= countBefore)
             {
-                Debug.LogError("[VRCSim] SpawnPlayer failed");
+                Debug.LogError("[VRCSim] SpawnPlayer failed — player count unchanged");
                 return null;
             }
 
@@ -75,6 +84,7 @@ namespace VRCSim
         {
             EnsureReady();
             _bots.Remove(player);
+            ClearStationsForPlayer(player);
             SimReflection.RemovePlayer(player);
             Debug.Log($"[VRCSim] Removed: {player.displayName}");
         }
@@ -88,7 +98,10 @@ namespace VRCSim
             foreach (var bot in new List<VRCPlayerApi>(_bots))
             {
                 if (bot != null && bot.IsValid())
+                {
+                    ClearStationsForPlayer(bot);
                     SimReflection.RemovePlayer(bot);
+                }
             }
             _bots.Clear();
             Debug.Log("[VRCSim] All bots removed");
@@ -109,8 +122,7 @@ namespace VRCSim
         // ── Movement ───────────────────────────────────────────────
 
         /// <summary>
-        /// Teleport a player to a position. Bypasses ClientSim's
-        /// remote-teleport-does-nothing guard.
+        /// Teleport a player to a position. Works for both local and remote.
         /// </summary>
         public static void Teleport(VRCPlayerApi player, Vector3 position,
             Quaternion? rotation = null)
@@ -127,9 +139,9 @@ namespace VRCSim
         /// <summary>
         /// Force a player to sit in a VRCStation.
         ///
-        /// This fires events through the REAL ClientSim pipeline:
+        /// Fires events through the REAL ClientSim pipeline:
         ///   IClientSimStationHandler.OnStationEnter → ClientSimUdonHelper
-        ///   → UdonBehaviour.RunEvent(eventName, ("Player", Networking.LocalPlayer))
+        ///   → UdonBehaviour.RunEvent("_onStationEntered", ("Player", ...))
         ///
         /// By wrapping in RunAsPlayer, Networking.LocalPlayer returns the
         /// correct player, so Udon code sees the right perspective.
@@ -152,12 +164,20 @@ namespace VRCSim
                 return false;
             }
 
+            // Clear stale user references (from removed players)
             var currentUser = SimReflection.GetStationUser(helper);
             if (currentUser != null)
             {
-                Debug.LogWarning(
-                    $"[VRCSim] {stationObj.name} occupied by {currentUser.displayName}");
-                return false;
+                if (!currentUser.IsValid())
+                {
+                    SimReflection.SetStationUser(helper, null);
+                }
+                else
+                {
+                    Debug.LogWarning(
+                        $"[VRCSim] {stationObj.name} occupied by {currentUser.displayName}");
+                    return false;
+                }
             }
 
             // Set _usingPlayer so IsOccupied() returns true
@@ -168,9 +188,7 @@ namespace VRCSim
             if (enterLoc != null)
                 Teleport(player, enterLoc.position, enterLoc.rotation);
 
-            // Fire events through the real pipeline as the sitting player.
-            // Inside RunAsPlayer: Networking.LocalPlayer == player,
-            // so UdonHelper.OnStationEnter fires RunEvent with the correct player.
+            // Fire events through the real pipeline as the sitting player
             SimNetwork.RunAsPlayer(player, () =>
             {
                 SimReflection.FireStationEnterHandlers(stationObj, station);
@@ -191,9 +209,18 @@ namespace VRCSim
             if (helper == null) return false;
 
             var currentUser = SimReflection.GetStationUser(helper);
-            if (currentUser == null || currentUser.playerId != player.playerId)
+            if (currentUser == null)
             {
-                Debug.LogWarning($"[VRCSim] {player.displayName} not in {stationObj.name}");
+                Debug.LogWarning($"[VRCSim] {stationObj.name} is empty, can't exit");
+                return false;
+            }
+
+            // Allow exit if the user is invalid (removed) or matches the player
+            if (currentUser.IsValid() && currentUser.playerId != player.playerId)
+            {
+                Debug.LogWarning(
+                    $"[VRCSim] {player.displayName} not in {stationObj.name}" +
+                    $" (occupied by {currentUser.displayName})");
                 return false;
             }
 
@@ -218,64 +245,46 @@ namespace VRCSim
         ///   - Networking.LocalPlayer returns the specified player
         ///   - Networking.IsMaster returns false (if player isn't master)
         ///   - player.isLocal returns true
-        ///
-        /// This is the key unlock for testing non-master behavior.
         /// </summary>
         public static void RunAsPlayer(VRCPlayerApi player, Action action) =>
             SimNetwork.RunAsPlayer(player, action);
 
         // ── Ownership ──────────────────────────────────────────────
 
-        /// <summary>
-        /// Transfer ownership and enforce ForceKinematicOnRemote.
-        /// </summary>
         public static void SetOwner(VRCPlayerApi player, GameObject obj) =>
             SimNetwork.TransferOwnership(player, obj);
 
-        /// <summary>Check who owns an object.</summary>
         public static VRCPlayerApi GetOwner(GameObject obj) =>
             Networking.GetOwner(obj);
 
         // ── Networking Rule Enforcement ────────────────────────────
 
-        /// <summary>
-        /// Enforce ForceKinematicOnRemote on a single object.
-        /// </summary>
         public static void EnforceKinematic(GameObject obj) =>
             SimNetwork.EnforceKinematicOnRemote(obj);
 
-        /// <summary>
-        /// Validate kinematic state across all VRCObjectSync objects.
-        /// Returns issues where non-owners have non-kinematic rigidbodies.
-        /// </summary>
         public static List<SimNetwork.KinematicIssue> ValidateKinematic() =>
             SimNetwork.ValidateKinematicState();
 
-        /// <summary>Simulate deserialization on a GameObject's UdonBehaviours.</summary>
         public static void SimulateDeserialization(GameObject obj) =>
             SimNetwork.SimulateDeserialization(obj);
 
-        /// <summary>Simulate a late joiner receiving current synced state.</summary>
         public static void SimulateLateJoiner(GameObject obj) =>
             SimNetwork.SimulateLateJoiner(obj);
 
         // ── Udon Variable Access ───────────────────────────────────
 
-        /// <summary>Get a program variable from an UdonBehaviour.</summary>
         public static object GetVar(GameObject obj, string varName)
         {
             var udon = SimReflection.GetUdonBehaviour(obj);
             return udon != null ? SimReflection.GetProgramVariable(udon, varName) : null;
         }
 
-        /// <summary>Set a program variable on an UdonBehaviour.</summary>
         public static void SetVar(GameObject obj, string varName, object value)
         {
             var udon = SimReflection.GetUdonBehaviour(obj);
             if (udon != null) SimReflection.SetProgramVariable(udon, varName, value);
         }
 
-        /// <summary>Send a custom event to an UdonBehaviour.</summary>
         public static void SendEvent(GameObject obj, string eventName)
         {
             var udon = SimReflection.GetUdonBehaviour(obj);
@@ -284,9 +293,6 @@ namespace VRCSim
 
         // ── Validation & Reporting ─────────────────────────────────
 
-        /// <summary>
-        /// Comprehensive state report: players, ownership, stations, kinematic.
-        /// </summary>
         public static string GetStateReport()
         {
             var sb = new StringBuilder();
@@ -359,6 +365,29 @@ namespace VRCSim
 
             sb.AppendLine(allPass ? "  RESULT: ALL PASS" : "  RESULT: FAILURES DETECTED");
             return sb.ToString();
+        }
+
+        // ── Private Helpers ────────────────────────────────────────
+
+        /// <summary>
+        /// Clear station occupancy for a player being removed.
+        /// Prevents stale references after RemovePlayer/RemoveAllPlayers.
+        /// </summary>
+        private static void ClearStationsForPlayer(VRCPlayerApi player)
+        {
+            var stations = UnityEngine.Object.FindObjectsByType<
+                VRC.SDK3.Components.VRCStation>(
+                FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+
+            foreach (var station in stations)
+            {
+                var helper = SimReflection.GetStationHelper(station.gameObject);
+                if (helper == null) continue;
+
+                var user = SimReflection.GetStationUser(helper);
+                if (user != null && user.playerId == player.playerId)
+                    SimReflection.SetStationUser(helper, null);
+            }
         }
 
         private static void EnsureReady()
