@@ -245,9 +245,39 @@ namespace VRCSim
         ///   - Networking.LocalPlayer returns the specified player
         ///   - Networking.IsMaster returns false (if player isn't master)
         ///   - player.isLocal returns true
+        ///
+        /// NOTE: Does NOT swap cached _localPlayer on UdonBehaviours.
+        /// Use RunAsClient for full client simulation.
         /// </summary>
         public static void RunAsPlayer(VRCPlayerApi player, Action action) =>
             SimNetwork.RunAsPlayer(player, action);
+
+        /// <summary>
+        /// Simulate running code as a specific player's VRChat client.
+        /// Unlike RunAsPlayer, this also swaps the cached _localPlayer
+        /// field on ALL scene UdonBehaviours that have one. This makes
+        /// master-gated code (e.g. if (!_localPlayer.isMaster) return)
+        /// behave correctly from the target player's perspective.
+        ///
+        /// Usage:
+        ///   VRCSim.RunAsClient(bob, () => {
+        ///       gm.RunEvent("_update");           // Bob's Update -- non-master gate fires
+        ///       gm.SendCustomEvent("OnDeserialization");  // Bob receives sync
+        ///   });
+        /// </summary>
+        public static void RunAsClient(VRCPlayerApi player, Action action)
+        {
+            EnsureReady();
+            var swapped = SwapLocalPlayerRefs(player);
+            try
+            {
+                SimNetwork.RunAsPlayer(player, action);
+            }
+            finally
+            {
+                RestoreLocalPlayerRefs(swapped);
+            }
+        }
 
         // ── Ownership ──────────────────────────────────────────────
 
@@ -407,6 +437,46 @@ namespace VRCSim
                 var user = SimReflection.GetStationUser(helper);
                 if (user != null && user.playerId == player.playerId)
                     SimReflection.SetStationUser(helper, null);
+            }
+        }
+
+        /// <summary>
+        /// Swap _localPlayer on every UdonBehaviour in the scene that has one.
+        /// Returns the list of (component, original) pairs for restoration.
+        /// </summary>
+        private static List<(Component udon, object original)> SwapLocalPlayerRefs(
+            VRCPlayerApi player)
+        {
+            var swapped = new List<(Component, object)>();
+#pragma warning disable CS0618 // FindObjectsOfType is obsolete but the non-generic
+            // FindObjectsByType(Type,...) doesn't exist in Unity 2022.3
+            var allUdons = UnityEngine.Object.FindObjectsOfType(
+                SimReflection.UdonBehaviourType);
+#pragma warning restore CS0618
+
+            foreach (Component udon in allUdons)
+            {
+                try
+                {
+                    var current = SimReflection.GetProgramVariable(udon, "_localPlayer");
+                    if (current != null)
+                    {
+                        swapped.Add((udon, current));
+                        SimReflection.SetProgramVariable(udon, "_localPlayer", player);
+                    }
+                }
+                catch { /* Variable doesn't exist on this UdonBehaviour -- skip */ }
+            }
+            return swapped;
+        }
+
+        private static void RestoreLocalPlayerRefs(
+            List<(Component udon, object original)> swapped)
+        {
+            foreach (var (udon, original) in swapped)
+            {
+                try { SimReflection.SetProgramVariable(udon, "_localPlayer", original); }
+                catch { /* Best effort restore */ }
             }
         }
 
