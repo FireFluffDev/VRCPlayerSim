@@ -456,16 +456,12 @@ namespace VRCSim
 
             foreach (Component udon in allUdons)
             {
-                try
-                {
-                    var current = SimReflection.GetProgramVariable(udon, "_localPlayer");
-                    if (current != null)
-                    {
-                        swapped.Add((udon, current));
-                        SimReflection.SetProgramVariable(udon, "_localPlayer", player);
-                    }
-                }
-                catch { /* Variable doesn't exist on this UdonBehaviour -- skip */ }
+                if (!SimReflection.TryGetProgramVariable(udon, "_localPlayer",
+                        out var current))
+                    continue;
+                if (current == null) continue;
+                swapped.Add((udon, current));
+                SimReflection.SetProgramVariable(udon, "_localPlayer", player);
             }
             return swapped;
         }

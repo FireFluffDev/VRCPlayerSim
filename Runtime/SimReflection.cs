@@ -38,6 +38,7 @@ namespace VRCSim
         // ── UdonBehaviour ──────────────────────────────────────────
         private static MethodInfo _ubRunEvent;
         private static MethodInfo _ubGetProgramVariable;
+        private static MethodInfo _ubTryGetProgramVariable;
         private static MethodInfo _ubSetProgramVariable;
         private static MethodInfo _ubSendCustomEvent;
 
@@ -105,6 +106,8 @@ namespace VRCSim
                 // These have generic overloads — must filter to non-generic
                 _ubGetProgramVariable = FindNonGenericMethod(
                     _udonBehaviourType, "GetProgramVariable", 1);
+                _ubTryGetProgramVariable = FindNonGenericMethod(
+                    _udonBehaviourType, "TryGetProgramVariable", 2);
                 _ubSetProgramVariable = FindNonGenericMethod(
                     _udonBehaviourType, "SetProgramVariable", 2);
                 _ubSendCustomEvent = FindNonGenericMethod(
@@ -250,6 +253,19 @@ namespace VRCSim
 
         public static object GetProgramVariable(Component udon, string name) =>
             _ubGetProgramVariable.Invoke(udon, new object[] { name });
+
+        /// <summary>
+        /// Check if variable exists and get its value without logging errors.
+        /// Returns true if the variable exists, false otherwise.
+        /// </summary>
+        public static bool TryGetProgramVariable(Component udon, string name,
+            out object value)
+        {
+            var args = new object[] { name, null };
+            bool result = (bool)_ubTryGetProgramVariable.Invoke(udon, args);
+            value = args[1];
+            return result;
+        }
 
         public static void SetProgramVariable(Component udon, string name,
             object value) =>
