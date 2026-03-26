@@ -52,51 +52,9 @@ VRCSim.VRCSim.RemoveAllPlayers();
 
 ## API Reference
 
-### Initialization
-| Method | Description |
-|--------|-------------|
-| `Init()` | Initialize the simulator. Returns error string or null. |
-| `IsReady` | Whether the simulator is initialized and reflection resolved. |
+See **[API.md](API.md)** for the full, auto-generated API reference.
 
-### Player Lifecycle
-| Method | Description |
-|--------|-------------|
-| `SpawnPlayer(name)` | Spawn a remote bot. Returns `VRCPlayerApi`. |
-| `RemovePlayer(player)` | Remove a bot. Clears station occupancy. |
-| `RemoveAllPlayers()` | Remove all bots spawned this session. |
-| `GetBots()` | List all active bots. |
-| `GetBot(name)` | Find a bot by partial name match. |
-| `Teleport(player, pos, rot?)` | Move a player to a position. |
-
-### Station Interaction
-| Method | Description |
-|--------|-------------|
-| `SitInStation(player, stationObj)` | Sit a player in a VRCStation. Fires real events. |
-| `ExitStation(player, stationObj)` | Remove a player from a VRCStation. |
-
-### Perspective & Networking
-| Method | Description |
-|--------|-------------|
-| `RunAsPlayer(player, action)` | Execute code as if `player` were the local player. |
-| `SetOwner(player, obj)` | Transfer ownership and enforce kinematic rules. |
-| `GetOwner(obj)` | Check who owns an object. |
-| `EnforceKinematic(obj)` | Apply ForceKinematicOnRemote on a single object. |
-| `ValidateKinematic()` | Find objects violating kinematic rules. |
-| `SimulateDeserialization(obj)` | Trigger OnDeserialization on UdonBehaviours. |
-| `SimulateLateJoiner(obj)` | Simulate a late joiner receiving state. |
-
-### Udon Variables
-| Method | Description |
-|--------|-------------|
-| `GetVar(obj, name)` | Read a program variable from UdonBehaviour. |
-| `SetVar(obj, name, value)` | Write a program variable. |
-| `SendEvent(obj, eventName)` | Send a custom event to UdonBehaviour. |
-
-### Validation
-| Method | Description |
-|--------|-------------|
-| `GetStateReport()` | Full state dump: players, ownership, kinematic. |
-| `ValidateVars(obj, expectations)` | Assert expected synced var values. |
+`API.md` is generated from the C# source code by `gen_api.py` and kept in sync automatically via a pre-commit hook. Never edit it manually.
 
 ## Architecture
 
@@ -104,9 +62,22 @@ VRCSim.VRCSim.RemoveAllPlayers();
 VRCSim.cs          — Public API (Init, Spawn, Sit, RunAsPlayer, etc.)
 SimNetwork.cs      — Perspective swapping, ownership, kinematic enforcement
 SimReflection.cs   — Cached reflection into ClientSim private internals
+SimSnapshot.cs     — Synced state capture and diffing
+gen_api.py         — Auto-generates API.md from source
+hooks/pre-commit   — Regenerates API.md on commit
 ```
 
 All ClientSim access is via reflection (isolated in `SimReflection.cs`) so SDK version breaks are easy to diagnose — you get a clear "Required member not found: X" error.
+
+## Contributing
+
+After cloning, run this once to enable the pre-commit hook:
+
+```sh
+git config core.hooksPath hooks
+```
+
+This ensures `API.md` is automatically regenerated whenever you change `Runtime/*.cs` or `gen_api.py`. The hook requires Python 3.10+ (via `uv`, `python`, or `py` on PATH).
 
 ## Known Limitations
 

@@ -1,0 +1,43 @@
+#!/bin/sh
+# Auto-regenerate API.md from C# source before each commit.
+# Triggers when Runtime/*.cs OR gen_api.py itself is staged.
+
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+STAGED=$(git diff --cached --name-only)
+
+# Trigger on C# source changes OR generator changes
+NEEDS_REGEN=false
+echo "$STAGED" | grep -q "^Runtime/.*\.cs$" && NEEDS_REGEN=true
+echo "$STAGED" | grep -q "^gen_api\.py$"    && NEEDS_REGEN=true
+
+if [ "$NEEDS_REGEN" = false ]; then
+    exit 0
+fi
+
+# Try uv first, fall back to python, then py (Windows launcher)
+if command -v uv >/dev/null 2>&1; then
+    uv run gen_api.py
+elif command -v python >/dev/null 2>&1; then
+    python gen_api.py
+elif command -v py >/dev/null 2>&1; then
+    py gen_api.py
+else
+    echo "pre-commit: No Python found (tried uv, python, py). Skipping API.md generation."
+    exit 0
+fi
+
+# Sanity check: API.md must exist and start with the expected header
+if [ ! -f API.md ]; then
+    echo "pre-commit: gen_api.py did not produce API.md — aborting commit."
+    exit 1
+fi
+
+FIRST_LINE=$(head -1 API.md)
+if [ "$FIRST_LINE" != "# VRCSim API Reference" ]; then
+    echo "pre-commit: API.md looks corrupted (unexpected first line) — aborting commit."
+    exit 1
+fi
+
+git add API.md
