@@ -61,7 +61,7 @@ VRC Player Simulator — public API. Simulates multiplayer interactions on top o
 | `void SimulateLateJoiner(GameObject obj, VRCPlayerApi player = null)` | — |
 | `void SimulateLateJoinerAll(VRCPlayerApi player = null)` | Simulate a late joiner on ALL synced objects in the scene. |
 | `void TransferMaster(VRCPlayerApi newMaster)` | Simulate master transfer. Changes master and fires _onNewMaster. |
-| `bool SendNetworkEvent(NetworkEventTarget target, GameObject obj, string eventName)` | Simulate SendCustomNetworkEvent routing. Returns true if the event fired, false if skipped (e.g. Owner target but caller is not owner). |
+| `bool SendNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget target, GameObject obj, string eventName)` | Simulate SendCustomNetworkEvent routing. Returns true if the event fired, false if skipped (e.g. Owner target but caller is not owner). |
 
 ### Udon Variable Access
 
@@ -133,7 +133,7 @@ Simulates VRChat networking rules that ClientSim skips: - Perspective swapping (
 
 | Signature | Description |
 |-----------|-------------|
-| `bool SimulateNetworkEvent(VRC.SDKBase.NetworkEventTarget target, GameObject obj, string eventName)` | Simulate SendCustomNetworkEvent routing. All: fires event on the UdonBehaviour (all clients see same instance). Owner: only fires if the current perspective is the owner. |
+| `bool SimulateNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget target, GameObject obj, string eventName)` | Simulate SendCustomNetworkEvent routing. All: fires event on the UdonBehaviour (all clients see same instance). Owner: only fires if the current perspective is the owner. |
 
 ## `VRCSim.SimReflection`
 

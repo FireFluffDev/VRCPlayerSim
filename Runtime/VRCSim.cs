@@ -319,7 +319,7 @@ namespace VRCSim
         /// Returns true if the event fired, false if skipped (e.g. Owner target
         /// but caller is not owner).
         /// </summary>
-        public static bool SendNetworkEvent(NetworkEventTarget target,
+        public static bool SendNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget target,
             GameObject obj, string eventName) =>
             SimNetwork.SimulateNetworkEvent(target, obj, eventName);
 

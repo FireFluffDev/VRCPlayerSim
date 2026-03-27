@@ -279,13 +279,13 @@ namespace VRCSim
         /// Owner: only fires if the current perspective is the owner.
         /// </summary>
         public static bool SimulateNetworkEvent(
-            VRC.SDKBase.NetworkEventTarget target,
+            VRC.Udon.Common.Interfaces.NetworkEventTarget target,
             GameObject obj, string eventName)
         {
             var udon = SimReflection.GetUdonBehaviour(obj);
             if (udon == null) return false;
 
-            if (target == NetworkEventTarget.All)
+            if (target == VRC.Udon.Common.Interfaces.NetworkEventTarget.All)
             {
                 SimReflection.SendCustomEvent(udon, eventName);
                 return true;
