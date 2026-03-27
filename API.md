@@ -135,6 +135,19 @@ Simulates VRChat networking rules that ClientSim skips: - Perspective swapping (
 |-----------|-------------|
 | `bool SimulateNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget target, GameObject obj, string eventName)` | Simulate SendCustomNetworkEvent routing. All: fires event on the UdonBehaviour (all clients see same instance). Owner: only fires if the current perspective is the owner. |
 
+### Types
+
+**`KinematicIssue`** (struct)
+
+| Field | Type |
+|-------|------|
+| `ObjectName` | `string` |
+| `ObjectPath` | `string` |
+| `OwnerId` | `int` |
+| `NonOwnerPlayerId` | `int` |
+| `IsKinematic` | `bool` |
+| `ShouldBeKinematic` | `bool` |
+
 ## `VRCSim.SimReflection`
 
 Cached reflection accessors for ClientSim internals. Isolated here so SDK version breaks are easy to diagnose and fix.
@@ -217,3 +230,19 @@ Captures and diffs the synced state of all UdonBehaviours in the scene. Used to 
 | Signature | Description |
 |-----------|-------------|
 | `string FormatDiff(List<SyncChange> changes)` | Format a diff as a readable string. |
+
+### Types
+
+**`ChangeType`** (enum)
+
+Values: `Added`, `Modified`, `Removed`
+
+**`SyncChange`** (struct)
+
+| Field | Type |
+|-------|------|
+| `ObjectPath` | `string` |
+| `VarName` | `string` |
+| `Before` | `object` |
+| `After` | `object` |
+| `Type` | `ChangeType` |

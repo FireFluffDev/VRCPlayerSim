@@ -86,8 +86,67 @@ def parse_signature(full_line):
         }
 
 
+
+def parse_nested_types(lines):
+    """Extract public structs (with fields) and enums from a class body."""
+    types = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+
+        # Match public struct
+        sm = re.match(r"public\s+struct\s+(\w+)", stripped)
+        if sm:
+            name = sm.group(1)
+            summary = collect_doc_comment(lines, i)
+            fields = []
+            depth = 0
+            for j in range(i, min(i + 50, len(lines))):
+                s = lines[j].strip()
+                depth += s.count("{") - s.count("}")
+                fm = re.match(r"public\s+(?!override)(\S+)\s+(\w+)\s*;", s)
+                if fm:
+                    fields.append((fm.group(1), fm.group(2)))
+                if depth <= 0 and j > i:
+                    break
+            types.append(
+                {"kind": "struct", "name": name, "summary": summary,
+                 "fields": fields}
+            )
+
+        # Match public enum
+        em = re.match(r"public\s+enum\s+(\w+)", stripped)
+        if em:
+            name = em.group(1)
+            summary = collect_doc_comment(lines, i)
+            # Collect all lines of the enum body
+            body_lines = []
+            depth = 0
+            for j in range(i, min(i + 30, len(lines))):
+                s = lines[j].strip()
+                depth += s.count("{") - s.count("}")
+                body_lines.append(s)
+                if depth <= 0 and j > i:
+                    break
+            # Extract values from between braces
+            body = " ".join(body_lines)
+            brace_content = re.search(r"\{(.+?)\}", body)
+            values = []
+            if brace_content:
+                for v in brace_content.group(1).split(","):
+                    v = v.strip().split("=")[0].strip()
+                    if v and v.isidentifier():
+                        values.append(v)
+            types.append(
+                {"kind": "enum", "name": name, "summary": summary,
+                 "values": values}
+            )
+        i += 1
+    return types
+
+
 def parse_class(path):
-    """Parse a C# file -> (class_name, class_summary, members)."""
+    """Parse a C# file -> (class_name, class_summary, members, nested_types)."""
     text = path.read_text(encoding="utf-8")
     lines = text.split("\n")
 
@@ -101,6 +160,7 @@ def parse_class(path):
             break
 
     members = []
+    nested_types = parse_nested_types(lines)
     current_section = "General"
     brace_depth = 0
     in_class = False
@@ -147,7 +207,7 @@ def parse_class(path):
         summary = collect_doc_comment(lines, i)
         members.append({"section": current_section, "summary": summary, **parsed})
 
-    return class_name, class_summary, members
+    return class_name, class_summary, members, nested_types
 
 
 def format_sig(m):
@@ -172,7 +232,7 @@ def generate_md():
         if not path.exists():
             continue
 
-        class_name, class_summary, members = parse_class(path)
+        class_name, class_summary, members, nested_types = parse_class(path)
         if not members:
             continue
 
@@ -196,6 +256,29 @@ def generate_md():
                 desc = (m["summary"] or "\u2014").replace("|", "\\|")
                 out.append(f"| `{sig}` | {desc} |")
             out.append("")
+
+        # Render nested types (structs, enums)
+        if nested_types:
+            out.append("### Types")
+            out.append("")
+            for nt in nested_types:
+                if nt["kind"] == "struct":
+                    out.append(f"**`{nt['name']}`** (struct)")
+                    if nt["summary"]:
+                        out.append(f" \u2014 {nt['summary']}")
+                    out.append("")
+                    out.append("| Field | Type |")
+                    out.append("|-------|------|")
+                    for ftype, fname in nt["fields"]:
+                        out.append(f"| `{fname}` | `{ftype}` |")
+                    out.append("")
+                elif nt["kind"] == "enum":
+                    out.append(f"**`{nt['name']}`** (enum)")
+                    if nt["summary"]:
+                        out.append(f" \u2014 {nt['summary']}")
+                    out.append("")
+                    out.append(f"Values: {', '.join(f'`{v}`' for v in nt['values'])}")
+                    out.append("")
 
     return "\n".join(out)
 
