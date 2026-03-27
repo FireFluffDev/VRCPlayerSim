@@ -1,6 +1,6 @@
 # VRCSim
 
-Multiplayer simulation for VRChat worlds. Spawn remote player bots, swap perspectives, test what Player 2 actually sees — all from the Unity editor, no friends required. 😢
+Multiplayer simulation for VRChat worlds. Spawn remote player bots, swap perspectives, test what Player 2 actually sees — all from the Unity editor, no friends required. 🥲
 
 Built on [ClientSim](https://docs.vrchat.com/docs/clientsim). Where ClientSim gives you one local player, VRCSim gives you as many as you need.
 
