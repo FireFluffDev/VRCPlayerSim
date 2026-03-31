@@ -20,7 +20,7 @@ VRC Player Simulator — public API. Simulates multiplayer interactions on top o
 |-----------|-------------|
 | `VRCPlayerApi SpawnPlayer(string name)` | Spawn a remote player bot. Fires OnPlayerJoined on all UdonBehaviours. Returns the VRCPlayerApi for the new player. |
 | `void RemovePlayer(VRCPlayerApi player)` | Remove a bot player. Fires OnPlayerLeft on all UdonBehaviours. If the removed player was master, auto-transfers master to the next player and fires _onNewMaster — matching real VRChat behavior. |
-| `void RemoveAllPlayers()` | Remove all bots spawned in this session. Note: Does NOT fire OnPlayerLeft events. Use RemovePlayer() in a loop if you need disconnect event testing. |
+| `void RemoveAllPlayers(bool fireEvents = true)` | Remove all bots spawned in this session. By default fires OnPlayerLeft on all UdonBehaviours for each bot (matching real VRChat disconnect behavior). Pass fireEvents: false for fast teardown when you don't need event processing. |
 | `List<VRCPlayerApi> GetBots()` | Get all bots. |
 | `VRCPlayerApi GetBot(string name)` | Get a bot by exact display name. |
 | `VRCPlayerApi GetBotByPrefix(string prefix)` | Get first bot whose name contains the given prefix (substring match). |
@@ -30,6 +30,10 @@ VRC Player Simulator — public API. Simulates multiplayer interactions on top o
 | Signature | Description |
 |-----------|-------------|
 | `void Teleport(VRCPlayerApi player, Vector3 position, Quaternion? rotation = null)` | Teleport a player to a position. Works for both local and remote. |
+| `void ApplyForce(GameObject obj, Vector3 force, ForceMode mode = ForceMode.Force)` | Apply a physics force to a GameObject's Rigidbody. Use this to simulate bumps, knockbacks, and other physics interactions that require continuous force rather than teleportation. Does nothing if the GameObject has no Rigidbody. |
+| `void SetVelocity(GameObject obj, Vector3 velocity)` | Set the velocity of a GameObject's Rigidbody directly. Useful for simulating movement without acceleration curves. Does nothing if the GameObject has no Rigidbody. |
+| `bool MoveToward(GameObject obj, Vector3 target, float speed = 5f)` | Move a GameObject toward a target position at a given speed. Sets velocity in the direction of the target. Returns true when the object is within 0.1 units of the target. Falls back to transform move if there is no Rigidbody. |
+| `Vector3 GetVelocity(GameObject obj)` | Get the Rigidbody velocity of a GameObject. Returns Vector3.zero if there is no Rigidbody. |
 
 ### Station Interaction
 
@@ -44,6 +48,15 @@ VRC Player Simulator — public API. Simulates multiplayer interactions on top o
 |-----------|-------------|
 | `void RunAsPlayer(VRCPlayerApi player, Action action)` | Run code from a specific player's perspective. Inside this block: - Networking.LocalPlayer returns the specified player - Networking.IsMaster returns false (if player isn't master) - player.isLocal returns true NOTE: Does NOT swap cached _localPlayer on UdonBehaviours. Use RunAsClient for full client simulation. |
 | `void RunAsClient(VRCPlayerApi player, Action action)` | Simulate running code as a specific player's VRChat client. Unlike RunAsPlayer, this also swaps the cached _localPlayer field on ALL scene UdonBehaviours that have one. This makes master-gated code (e.g. if (!_localPlayer.isMaster) return) behave correctly from the target player's perspective. Usage: VRCSim.RunAsClient(bob, () => { gm.RunEvent("_update"); // Bob's Update -- non-master gate fires gm.SendCustomEvent("OnDeserialization"); // Bob receives sync }); |
+
+### Persistent Possession
+
+| Signature | Description |
+|-----------|-------------|
+| `void Possess(VRCPlayerApi bot)` | Persistently become a bot. After this call, Networking.LocalPlayer returns the bot, all UdonBehaviour _localPlayer fields point to the bot, and ClientSim's interaction pipeline (click stations, press buttons, walk around) acts as the bot. Unlike RunAsPlayer/RunAsClient (which are scoped to a callback), Possess stays active until you call Unpossess or Possess another bot. This is the API backing the Bot Controller EditorWindow's "Possess" button, but can also be called from test scripts. |
+| `void Unpossess()` | Release possession — Networking.LocalPlayer returns Player_1 again. Safe to call even if not currently possessing (no-op). |
+| `bool IsPossessing` | True if currently possessing a bot. |
+| `VRCPlayerApi PossessedBot` | The currently possessed bot, or null. |
 
 ### Ownership
 
@@ -61,6 +74,7 @@ VRC Player Simulator — public API. Simulates multiplayer interactions on top o
 | `void SimulateDeserialization(GameObject obj)` | Fire OnDeserialization on a GameObject's UdonBehaviours. |
 | `void SimulateLateJoiner(GameObject obj, VRCPlayerApi player = null)` | Simulate a late joiner receiving synced state on one object. |
 | `void SimulateLateJoinerAll(VRCPlayerApi player = null)` | Simulate a late joiner on ALL synced objects in the scene. |
+| `VRCPlayerApi SimulateLateJoin(string name = null)` | Simulate a full late join: spawn a new bot and fire OnDeserialization on ALL synced objects from the new player's perspective. This is what actually happens in VRChat when someone joins mid-game: they get a fresh client, connect, receive all current synced state via OnDeserialization, and then start running Update/FixedUpdate. Returns the newly spawned bot so you can possess or inspect it. |
 | `void TransferMaster(VRCPlayerApi newMaster)` | Simulate master transfer. Changes master and fires _onNewMaster. |
 | `bool SendNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget target, GameObject obj, string eventName)` | Simulate SendCustomNetworkEvent routing. Returns true if the event fired, false if skipped (e.g. Owner target but caller is not owner). |
 
@@ -180,6 +194,28 @@ Proxy-level reflection for UdonSharpBehaviour C# objects. UdonSharp creates a du
 | Signature | Description |
 |-----------|-------------|
 | `object CoerceValue(object value, Type targetType)` | Coerce a value to match the target field type. Handles the common UdonSharp mismatches: int → float, double → float, float → int, int → bool Returns null if coercion is not possible. |
+
+## `VRCSim.SimProxy`
+
+SimProxy GameObject overloads. Accept a GameObject instead of a Component, automatically finding the UdonSharpBehaviour C# proxy. Matches the pattern of VRCSim.GetVar/SetVar/RunEvent which also accept GameObjects.
+
+### General
+
+| Signature | Description |
+|-----------|-------------|
+| `Component FindProxy(GameObject obj)` | Find the UdonSharpBehaviour C# proxy component on a GameObject. Skips UdonBehaviour, Transform, and other Unity built-in components. Returns the first MonoBehaviour whose type inherits from UdonSharpBehaviour (detected by walking the type hierarchy — avoids hard dependency on UdonSharp assembly). Returns null if no proxy is found. |
+| `Component FindProxyWithMethod(GameObject obj, string methodName, int paramCount = 0)` | Find the UdonSharpBehaviour proxy that has a specific method. Useful when a GameObject has multiple UdonSharp components. |
+| `Component FindProxyWithField(GameObject obj, string fieldName)` | Find the UdonSharpBehaviour proxy that has a specific field. |
+
+### GameObject convenience overloads
+
+| Signature | Description |
+|-----------|-------------|
+| `object Call(GameObject obj, string methodName, params object[] args)` | Call a method on the UdonSharpBehaviour proxy found on a GameObject. Auto-discovers the proxy component — no manual GetComponent needed. |
+| `void SetField(GameObject obj, string fieldName, object value, bool syncToHeap = true)` | Set a C# proxy field on the UdonSharpBehaviour found on a GameObject. |
+| `object GetField(GameObject obj, string fieldName)` | Read a C# proxy field from the UdonSharpBehaviour found on a GameObject. |
+| `int InitProxy(GameObject obj)` | Initialize the proxy on the UdonSharpBehaviour found on a GameObject. |
+| `int InitProxyDeep(GameObject obj)` | InitProxy + deep scene reference resolution on a GameObject. |
 
 ## `VRCSim.SimNetwork`
 

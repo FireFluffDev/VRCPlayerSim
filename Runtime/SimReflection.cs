@@ -203,6 +203,7 @@ namespace VRCSim
         {
             _initialized = false;
             _initError = null;
+            _syncedVarNameCache.Clear();
         }
 
         // ── Public Accessors ───────────────────────────────────────

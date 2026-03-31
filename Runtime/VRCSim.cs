@@ -26,6 +26,8 @@ namespace VRCSim
         {
             _ready = false;
             _bots.Clear();
+            _possessedBot = null;
+            _possessSwapped = null;
             SimReflection.Reset();
         }
 
@@ -122,12 +124,22 @@ namespace VRCSim
 
         /// <summary>
         /// Remove all bots spawned in this session.
-        /// Note: Does NOT fire OnPlayerLeft events. Use RemovePlayer() in a loop
-        /// if you need disconnect event testing.
+        /// By default fires OnPlayerLeft on all UdonBehaviours for each bot
+        /// (matching real VRChat disconnect behavior). Pass fireEvents: false
+        /// for fast teardown when you don't need event processing.
         /// </summary>
-        public static void RemoveAllPlayers()
+        public static void RemoveAllPlayers(bool fireEvents = true)
         {
             EnsureReady();
+            if (fireEvents)
+            {
+                // RemovePlayer fires events + handles master transfer
+                foreach (var bot in new List<VRCPlayerApi>(_bots))
+                    if (bot != null && bot.IsValid())
+                        RemovePlayer(bot);
+                return;
+            }
+            // Fast path: skip events, just nuke everything
             foreach (var bot in new List<VRCPlayerApi>(_bots))
             {
                 if (bot != null && bot.IsValid())
@@ -137,7 +149,7 @@ namespace VRCSim
                 }
             }
             _bots.Clear();
-            Debug.Log("[VRCSim] All bots removed");
+            Debug.Log("[VRCSim] All bots removed (events skipped)");
         }
 
         /// <summary>Get all bots.</summary>
@@ -174,6 +186,79 @@ namespace VRCSim
             player.gameObject.transform.position = position;
             if (rotation.HasValue)
                 player.gameObject.transform.rotation = rotation.Value;
+        }
+
+        /// <summary>
+        /// Apply a physics force to a GameObject's Rigidbody.
+        /// Use this to simulate bumps, knockbacks, and other physics
+        /// interactions that require continuous force rather than teleportation.
+        /// Does nothing if the GameObject has no Rigidbody.
+        /// </summary>
+        public static void ApplyForce(GameObject obj, Vector3 force,
+            ForceMode mode = ForceMode.Force)
+        {
+            EnsureReady();
+            var rb = obj != null ? obj.GetComponent<Rigidbody>() : null;
+            if (rb == null) return;
+            rb.isKinematic = false;
+            rb.AddForce(force, mode);
+        }
+
+        /// <summary>
+        /// Set the velocity of a GameObject's Rigidbody directly.
+        /// Useful for simulating movement without acceleration curves.
+        /// Does nothing if the GameObject has no Rigidbody.
+        /// </summary>
+        public static void SetVelocity(GameObject obj, Vector3 velocity)
+        {
+            EnsureReady();
+            var rb = obj != null ? obj.GetComponent<Rigidbody>() : null;
+            if (rb == null) return;
+            rb.isKinematic = false;
+            rb.velocity = velocity;
+        }
+
+        /// <summary>
+        /// Move a GameObject toward a target position at a given speed.
+        /// Sets velocity in the direction of the target. Returns true
+        /// when the object is within 0.1 units of the target.
+        /// Falls back to transform move if there is no Rigidbody.
+        /// </summary>
+        public static bool MoveToward(GameObject obj, Vector3 target,
+            float speed = 5f)
+        {
+            EnsureReady();
+            if (obj == null) return true;
+            var rb = obj.GetComponent<Rigidbody>();
+            if (rb == null)
+            {
+                var diff = target - obj.transform.position;
+                if (diff.magnitude < 0.1f) return true;
+                obj.transform.position = Vector3.MoveTowards(
+                    obj.transform.position, target,
+                    speed * Time.fixedDeltaTime);
+                return false;
+            }
+            var delta = target - obj.transform.position;
+            if (delta.magnitude < 0.1f)
+            {
+                rb.velocity = Vector3.zero;
+                return true;
+            }
+            rb.isKinematic = false;
+            rb.velocity = delta.normalized * speed;
+            return false;
+        }
+
+        /// <summary>
+        /// Get the Rigidbody velocity of a GameObject.
+        /// Returns Vector3.zero if there is no Rigidbody.
+        /// </summary>
+        public static Vector3 GetVelocity(GameObject obj)
+        {
+            if (obj == null) return Vector3.zero;
+            var rb = obj.GetComponent<Rigidbody>();
+            return rb != null ? rb.velocity : Vector3.zero;
         }
 
         // ── Station Interaction ────────────────────────────────────
@@ -341,6 +426,90 @@ namespace VRCSim
             }
         }
 
+        // ── Persistent Possession ──────────────────────────────────
+
+        // Stored state for the active possession session.
+        private static VRCPlayerApi _possessedBot;
+        private static int _savedLocalPlayerId;
+        private static VRCPlayerApi _savedLocalPlayer;
+        private static List<(Component udon, object original)> _possessSwapped;
+
+        /// <summary>
+        /// Persistently become a bot. After this call, Networking.LocalPlayer
+        /// returns the bot, all UdonBehaviour _localPlayer fields point to
+        /// the bot, and ClientSim's interaction pipeline (click stations,
+        /// press buttons, walk around) acts as the bot.
+        ///
+        /// Unlike RunAsPlayer/RunAsClient (which are scoped to a callback),
+        /// Possess stays active until you call Unpossess or Possess another bot.
+        ///
+        /// This is the API backing the Bot Controller EditorWindow's
+        /// "Possess" button, but can also be called from test scripts.
+        /// </summary>
+        public static void Possess(VRCPlayerApi bot)
+        {
+            EnsureReady();
+            if (bot == null || !bot.IsValid())
+                throw new ArgumentException("[VRCSim] Possess: bot is null or invalid.");
+
+            // If already possessing someone, release first
+            if (_possessedBot != null) Unpossess();
+
+            var pm = SimReflection.GetPlayerManager();
+            if (pm == null)
+                throw new InvalidOperationException("[VRCSim] ClientSim not running.");
+
+            // Save original identity
+            _savedLocalPlayerId = SimReflection.GetLocalPlayerId(pm);
+            _savedLocalPlayer = SimReflection.GetLocalPlayer(pm);
+
+            // Swap at ClientSim level
+            SimReflection.SetLocalPlayerId(pm, bot.playerId);
+            SimReflection.SetLocalPlayer(pm, bot);
+            if (_savedLocalPlayer != null && _savedLocalPlayer.IsValid())
+                SimReflection.SetIsLocal(_savedLocalPlayer, false);
+            SimReflection.SetIsLocal(bot, true);
+
+            // Swap _localPlayer on all UdonBehaviours
+            _possessSwapped = SwapLocalPlayerRefs(bot);
+            _possessedBot = bot;
+
+            Debug.Log($"[VRCSim] Possessed: {bot.displayName} (ID={bot.playerId})");
+        }
+
+        /// <summary>
+        /// Release possession — Networking.LocalPlayer returns Player_1 again.
+        /// Safe to call even if not currently possessing (no-op).
+        /// </summary>
+        public static void Unpossess()
+        {
+            if (_possessedBot == null) return;
+
+            var pm = SimReflection.GetPlayerManager();
+            if (pm != null)
+            {
+                SimReflection.SetLocalPlayerId(pm, _savedLocalPlayerId);
+                SimReflection.SetLocalPlayer(pm, _savedLocalPlayer);
+                if (_possessedBot.IsValid())
+                    SimReflection.SetIsLocal(_possessedBot, false);
+                if (_savedLocalPlayer != null && _savedLocalPlayer.IsValid())
+                    SimReflection.SetIsLocal(_savedLocalPlayer, true);
+            }
+
+            if (_possessSwapped != null)
+                RestoreLocalPlayerRefs(_possessSwapped);
+
+            Debug.Log($"[VRCSim] Released: {_possessedBot.displayName}");
+            _possessedBot = null;
+            _possessSwapped = null;
+        }
+
+        /// <summary>True if currently possessing a bot.</summary>
+        public static bool IsPossessing => _possessedBot != null;
+
+        /// <summary>The currently possessed bot, or null.</summary>
+        public static VRCPlayerApi PossessedBot => _possessedBot;
+
         // ── Ownership ──────────────────────────────────────────────
 
         /// <summary>Transfer ownership of a GameObject to a player and enforce kinematic rules.</summary>
@@ -375,6 +544,27 @@ namespace VRCSim
         /// </summary>
         public static void SimulateLateJoinerAll(VRCPlayerApi player = null) =>
             SimNetwork.SimulateLateJoinerAll(player);
+
+        /// <summary>
+        /// Simulate a full late join: spawn a new bot and fire OnDeserialization
+        /// on ALL synced objects from the new player's perspective.
+        ///
+        /// This is what actually happens in VRChat when someone joins mid-game:
+        /// they get a fresh client, connect, receive all current synced state
+        /// via OnDeserialization, and then start running Update/FixedUpdate.
+        ///
+        /// Returns the newly spawned bot so you can possess or inspect it.
+        /// </summary>
+        public static VRCPlayerApi SimulateLateJoin(string name = null)
+        {
+            string botName = name ?? $"LateJoiner_{_bots.Count}";
+            var bot = SpawnPlayer(botName);
+            if (bot == null) return null;
+            SimulateLateJoinerAll(bot);
+            Debug.Log($"[VRCSim] Late join simulated: {bot.displayName} " +
+                      $"(ID={bot.playerId}) received all synced state.");
+            return bot;
+        }
 
         /// <summary>
         /// Simulate master transfer. Changes master and fires _onNewMaster.

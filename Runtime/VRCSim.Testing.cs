@@ -166,10 +166,13 @@ namespace VRCSim
         public static void TickAll(int frames = 1)
         {
             EnsureReady();
-            var udons = SimReflection.FindAllUdonBehaviours();
             for (int f = 0; f < frames; f++)
+            {
+                // Re-query each frame: an _update can destroy UdonBehaviours
+                var udons = SimReflection.FindAllUdonBehaviours();
                 foreach (var udon in udons)
-                    SimReflection.RunEvent(udon, "_update");
+                    if (udon != null) SimReflection.RunEvent(udon, "_update");
+            }
         }
 
         /// <summary>
@@ -179,10 +182,12 @@ namespace VRCSim
         public static void TickFixedAll(int frames = 1)
         {
             EnsureReady();
-            var udons = SimReflection.FindAllUdonBehaviours();
             for (int f = 0; f < frames; f++)
+            {
+                var udons = SimReflection.FindAllUdonBehaviours();
                 foreach (var udon in udons)
-                    SimReflection.RunEvent(udon, "_fixedUpdate");
+                    if (udon != null) SimReflection.RunEvent(udon, "_fixedUpdate");
+            }
         }
 
         // ── Sync Propagation ────────────────────────────────────────

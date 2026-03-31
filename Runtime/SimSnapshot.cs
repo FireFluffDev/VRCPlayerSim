@@ -204,7 +204,7 @@ namespace VRCSim
         /// System.Object.Equals compares array references, which means
         /// two int[] with identical contents compare as NOT equal.
         /// </summary>
-        internal static bool DeepEquals(object a, object b)
+        public static bool DeepEquals(object a, object b)
         {
             if (ReferenceEquals(a, b)) return true;
             if (a == null || b == null) return false;

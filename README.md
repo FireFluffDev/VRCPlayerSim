@@ -127,33 +127,60 @@ Summary of `VRCSim.VRCSim` entry points:
 
 | Category | Methods |
 |----------|---------|
-| Lifecycle | `Init`, `IsReady`, `SpawnPlayer`, `RemovePlayer`, `RemoveAllPlayers`, `GetBots`, `GetBot` |
-| Movement | `Teleport` |
+| Lifecycle | `Init`, `IsReady`, `SpawnPlayer`, `RemovePlayer`, `RemoveAllPlayers`, `GetBots`, `GetBot`, `GetBotByPrefix` |
+| Movement | `Teleport`, `ApplyForce`, `SetVelocity`, `MoveToward`, `GetVelocity` |
 | Stations | `SitInStation`, `ExitStation`, `IsPlayerInStation` |
-| Perspective | `RunAsPlayer`, `RunAsClient`, `RunAsClient<T>` |
+| Perspective | `RunAsPlayer`, `RunAsClient`, `RunAsClient<T>`, `Possess`, `Unpossess`, `IsPossessing`, `PossessedBot` |
 | Ownership | `SetOwner`, `GetOwner`, `TransferMaster` |
-| Variables | `GetVar`, `SetVar`, `SetVars`, `SendEvent`, `GetSyncedVarNames`, `GetSyncedVars` |
+| Variables | `GetVar`, `SetVar`, `SetVarHeapOnly`, `SetVars`, `SendEvent`, `GetSyncedVarNames`, `GetSyncedVars` |
 | Proxy Fields | `InitProxy`, `InitProxyDeep`, `SetField`, `GetField`, `SetFields` |
-| Method Invoke | `Call`, `Call<T>` |
+| Method Invoke | `Call`, `CallAs<T>` |
 | Snapshots | `TakeSnapshot`, `DiffSnapshots` |
 | Simulation | `RunUpdate`, `RunFixedUpdate`, `TickAll`, `TickFixedAll`, `RunEvent`, `RunEventWithArgs` |
-| Sync | `SyncToAll`, `SimulateDeserialization`, `SimulateLateJoiner`, `SimulateLateJoinerAll` |
+| Sync | `SyncToAll`, `SimulateDeserialization`, `SimulateLateJoiner`, `SimulateLateJoinerAll`, `SimulateLateJoin` |
 | Player Events | `SimulatePlayerLeft`, `SimulatePlayerJoined` |
 | Networking | `SendNetworkEvent`, `EnforceKinematic`, `ValidateKinematic` |
+| State Reading | `GetField`, `GetField<T>`, `GetBoth` |
 | Reporting | `GetStateReport`, `ValidateVars`, `CheckVars` |
 
 Lower-level access is available through `SimReflection` and `SimNetwork` — see API.md for details.
+
+## Bot Controller (Editor Window)
+
+Open **VRCSim > Bot Controller** (or `Ctrl+Shift+B`) during Play Mode.
+
+Works like ClientSim, but for multiple players:
+
+1. **Spawn** bots — they appear in the world like real players
+2. **Possess** a bot — you ARE that bot now. Walk around with WASD in Game View, click stations to sit, click buttons to interact. `Networking.LocalPlayer` returns the bot. Udon code sees the bot's player ID.
+3. **Tab** to cycle through bots, **Escape** to release back to Player_1
+4. Click a bot's gizmo in Scene View to possess it instantly
+
+No code required for human testing. For scripted tests, use the API directly:
+
+```csharp
+var alice = VRCSim.SpawnPlayer("Alice");
+VRCSim.Possess(alice);       // now Networking.LocalPlayer == alice
+// ... interact in Game View as Alice ...
+VRCSim.Unpossess();          // back to Player_1
+```
+
+Scene View gizmos show colored labels, velocity arrows, and master status for all bots.
 
 ## Architecture
 
 ```
 Runtime/
-  VRCSim.cs           Public API facade (core: players, stations, perspective)
-  VRCSim.Testing.cs   Public API facade (testing: validation, proxy, ticking)
-  SimProxy.cs         C# proxy field access and method invocation for UdonSharp
-  SimNetwork.cs       Perspective swapping, ownership, kinematic enforcement
-  SimReflection.cs    Cached reflection into ClientSim internals
-  SimSnapshot.cs      Synced state capture and diffing
+  VRCSim.cs                Public API facade (core: players, movement, stations, perspective)
+  VRCSim.Testing.cs        Public API facade (testing: validation, proxy, ticking)
+  SimProxy.cs              C# proxy field access and method invocation for UdonSharp
+  SimProxy.GameObject.cs   GameObject overloads for SimProxy convenience methods
+  SimNetwork.cs            Perspective swapping, ownership, kinematic enforcement
+  SimReflection.cs         Cached reflection into ClientSim internals
+  SimSnapshot.cs           Synced state capture and diffing
+  VarState.cs              Dual-store (heap + proxy) variable reading
+  BotControlWindow.cs      EditorWindow: spawn, possess, stations, inspect
+  Tests/VRCSimSelfTests.cs 30 unit tests (runs without ClientSim)
 ```
 
 All ClientSim access goes through reflection, isolated in `SimReflection.cs`. When a VRChat SDK update breaks an internal API, you get `Required member not found: X` at init time — not a null ref mid-test.
@@ -177,10 +204,9 @@ The pre-commit hook auto-regenerates `API.md` from source when you change `Runti
 
 ## Roadmap
 
-VRCSim is currently API-only. Planned additions:
-
-- **Editor Window** — a Unity panel to spawn bots, manage stations, and inspect synced state without writing code.
-- **Scene View gizmos** — visualize bot positions and ownership in the Scene view.
+- **Game View overlay** — show possessed bot name/status directly in Game View
+- **Global hotkeys** — Tab/Escape work from any window, not just Bot Controller
+- **Snapshot diff viewer** — visual before/after comparison of synced state
 
 ## Limitations
 
