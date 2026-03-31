@@ -13,13 +13,13 @@ Designed to be driven by both humans (Editor scripts) and **AI agents** via [Uni
 In Unity: **Window → Package Manager → + → Add package from git URL**:
 
 ```
-https://github.com/deolson/VRCPlayerSim.git
+https://github.com/FireFluffDev/VRCPlayerSim.git
 ```
 
 Or add directly to `Packages/manifest.json`:
 
 ```json
-"com.fire.vrcsim": "https://github.com/deolson/VRCPlayerSim.git"
+"com.fire.vrcsim": "https://github.com/FireFluffDev/VRCPlayerSim.git"
 ```
 
 ### Requirements
@@ -188,7 +188,7 @@ All ClientSim access goes through reflection, isolated in `SimReflection.cs`. Wh
 ## Contributing
 
 ```sh
-git clone https://github.com/deolson/VRCPlayerSim.git
+git clone https://github.com/FireFluffDev/VRCPlayerSim.git
 cd VRCPlayerSim
 pip install pre-commit    # or: uv tool install pre-commit
 pre-commit install
