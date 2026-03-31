@@ -13,5 +13,10 @@
     "clientsim",
     "multiplayer",
     "testing"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/deolson/VRCPlayerSim.git"
+  },
+  "license": "MIT"
 }

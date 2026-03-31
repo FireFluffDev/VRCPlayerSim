@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
@@ -38,7 +39,7 @@ namespace VRCSim
                 var syncedNames = SimReflection.GetSyncedVarNames(udon);
                 if (syncedNames.Count == 0) continue;
 
-                var path = GetPath(udon.transform);
+                var path = SimReflection.GetPath(udon.transform);
                 var vars = new Dictionary<string, object>();
 
                 foreach (var varName in syncedNames)
@@ -67,7 +68,7 @@ namespace VRCSim
                 var syncedNames = SimReflection.GetSyncedVarNames(udon);
                 if (syncedNames.Count == 0) continue;
 
-                var path = GetPath(udon.transform);
+                var path = SimReflection.GetPath(udon.transform);
                 var vars = new Dictionary<string, object>();
 
                 foreach (var varName in syncedNames)
@@ -103,7 +104,7 @@ namespace VRCSim
                     bool existed = beforeVars != null
                         && beforeVars.TryGetValue(varName, out beforeVal);
 
-                    if (!existed || !Equals(beforeVal, afterVal))
+                    if (!existed || !DeepEquals(beforeVal, afterVal))
                     {
                         changes.Add(new SyncChange
                         {
@@ -117,13 +118,16 @@ namespace VRCSim
                 }
             }
 
-            // Check for vars that existed in 'before' but not 'after'
+            // Check for vars/objects that existed in 'before' but not 'after'
             foreach (var (path, beforeVars) in before.State)
             {
                 after.State.TryGetValue(path, out var afterVars);
-                if (afterVars == null)
+
+                foreach (var (varName, beforeVal) in beforeVars)
                 {
-                    foreach (var (varName, beforeVal) in beforeVars)
+                    bool stillExists = afterVars != null
+                        && afterVars.ContainsKey(varName);
+                    if (!stillExists)
                     {
                         changes.Add(new SyncChange
                         {
@@ -195,9 +199,36 @@ namespace VRCSim
 
         // ── Helpers ────────────────────────────────────────────────
 
+        /// <summary>
+        /// Deep equality that handles arrays by value (not reference).
+        /// System.Object.Equals compares array references, which means
+        /// two int[] with identical contents compare as NOT equal.
+        /// </summary>
+        internal static bool DeepEquals(object a, object b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            if (a == null || b == null) return false;
+            if (a is Array arrA && b is Array arrB)
+            {
+                if (arrA.GetType() != arrB.GetType()) return false;
+                if (arrA.Length != arrB.Length) return false;
+                for (int i = 0; i < arrA.Length; i++)
+                    if (!Equals(arrA.GetValue(i), arrB.GetValue(i)))
+                        return false;
+                return true;
+            }
+            return Equals(a, b);
+        }
+
         private static string FormatValue(object val)
         {
             if (val == null) return "null";
+            if (val is Vector3 v3)
+                return $"({v3.x:F2}, {v3.y:F2}, {v3.z:F2})";
+            if (val is Quaternion q)
+                return $"({q.x:F2}, {q.y:F2}, {q.z:F2}, {q.w:F2})";
+            if (val is Color c)
+                return $"({c.r:F2}, {c.g:F2}, {c.b:F2}, {c.a:F2})";
             if (val is int[] ia)
                 return $"int[{ia.Length}]{{{string.Join(",", ia)}}}";
             if (val is float[] fa)
@@ -209,15 +240,5 @@ namespace VRCSim
             return val.ToString();
         }
 
-        private static string GetPath(Transform t)
-        {
-            var parts = new List<string>();
-            while (t != null)
-            {
-                parts.Insert(0, t.name);
-                t = t.parent;
-            }
-            return string.Join("/", parts);
-        }
     }
 }

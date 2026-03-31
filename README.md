@@ -129,12 +129,16 @@ Summary of `VRCSim.VRCSim` entry points:
 |----------|---------|
 | Lifecycle | `Init`, `IsReady`, `SpawnPlayer`, `RemovePlayer`, `RemoveAllPlayers`, `GetBots`, `GetBot` |
 | Movement | `Teleport` |
-| Stations | `SitInStation`, `ExitStation` |
+| Stations | `SitInStation`, `ExitStation`, `IsPlayerInStation` |
 | Perspective | `RunAsPlayer`, `RunAsClient`, `RunAsClient<T>` |
 | Ownership | `SetOwner`, `GetOwner`, `TransferMaster` |
-| Variables | `GetVar`, `SetVar`, `SendEvent`, `GetSyncedVarNames`, `GetSyncedVars` |
+| Variables | `GetVar`, `SetVar`, `SetVars`, `SendEvent`, `GetSyncedVarNames`, `GetSyncedVars` |
+| Proxy Fields | `InitProxy`, `InitProxyDeep`, `SetField`, `GetField`, `SetFields` |
+| Method Invoke | `Call`, `Call<T>` |
 | Snapshots | `TakeSnapshot`, `DiffSnapshots` |
-| Simulation | `RunUpdate`, `RunUpdate(obj, frames)`, `RunEvent`, `SimulateDeserialization`, `SimulateLateJoiner`, `SimulateLateJoinerAll` |
+| Simulation | `RunUpdate`, `RunFixedUpdate`, `TickAll`, `TickFixedAll`, `RunEvent`, `RunEventWithArgs` |
+| Sync | `SyncToAll`, `SimulateDeserialization`, `SimulateLateJoiner`, `SimulateLateJoinerAll` |
+| Player Events | `SimulatePlayerLeft`, `SimulatePlayerJoined` |
 | Networking | `SendNetworkEvent`, `EnforceKinematic`, `ValidateKinematic` |
 | Reporting | `GetStateReport`, `ValidateVars`, `CheckVars` |
 
@@ -144,7 +148,9 @@ Lower-level access is available through `SimReflection` and `SimNetwork` — see
 
 ```
 Runtime/
-  VRCSim.cs           Public API facade
+  VRCSim.cs           Public API facade (core: players, stations, perspective)
+  VRCSim.Testing.cs   Public API facade (testing: validation, proxy, ticking)
+  SimProxy.cs         C# proxy field access and method invocation for UdonSharp
   SimNetwork.cs       Perspective swapping, ownership, kinematic enforcement
   SimReflection.cs    Cached reflection into ClientSim internals
   SimSnapshot.cs      Synced state capture and diffing

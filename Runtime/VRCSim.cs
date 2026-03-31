@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using UnityEngine;
 using VRC.SDKBase;
 
@@ -16,7 +15,7 @@ namespace VRCSim
     ///   VRCSim.SitInStation(bot, stationObj);
     ///   VRCSim.RunAsPlayer(bot, () => { /* runs as Alice's client */ });
     /// </summary>
-    public static class VRCSim
+    public static partial class VRCSim
     {
         private static readonly List<VRCPlayerApi> _bots = new();
         private static bool _ready;
@@ -71,7 +70,17 @@ namespace VRCSim
                 return null;
             }
 
-            var newPlayer = VRCPlayerApi.AllPlayers[VRCPlayerApi.AllPlayers.Count - 1];
+            // Find the player that was not there before (do not assume append order)
+            VRCPlayerApi newPlayer = null;
+            int highestId = int.MinValue;
+            foreach (var p in VRCPlayerApi.AllPlayers)
+            {
+                if (p.playerId > highestId)
+                {
+                    highestId = p.playerId;
+                    newPlayer = p;
+                }
+            }
             _bots.Add(newPlayer);
 
             Debug.Log($"[VRCSim] Spawned: {newPlayer.displayName} (id={newPlayer.playerId})");
@@ -113,6 +122,8 @@ namespace VRCSim
 
         /// <summary>
         /// Remove all bots spawned in this session.
+        /// Note: Does NOT fire OnPlayerLeft events. Use RemovePlayer() in a loop
+        /// if you need disconnect event testing.
         /// </summary>
         public static void RemoveAllPlayers()
         {
@@ -132,11 +143,20 @@ namespace VRCSim
         /// <summary>Get all bots.</summary>
         public static List<VRCPlayerApi> GetBots() => new(_bots);
 
-        /// <summary>Get a bot by name (partial match).</summary>
+        /// <summary>Get a bot by exact display name.</summary>
         public static VRCPlayerApi GetBot(string name)
         {
             foreach (var bot in _bots)
-                if (bot != null && bot.IsValid() && bot.displayName.Contains(name))
+                if (bot != null && bot.IsValid() && bot.displayName == name)
+                    return bot;
+            return null;
+        }
+
+        /// <summary>Get first bot whose name contains the given prefix (substring match).</summary>
+        public static VRCPlayerApi GetBotByPrefix(string prefix)
+        {
+            foreach (var bot in _bots)
+                if (bot != null && bot.IsValid() && bot.displayName.Contains(prefix))
                     return bot;
             return null;
         }
@@ -380,8 +400,29 @@ namespace VRCSim
             return udon != null ? SimReflection.GetProgramVariable(udon, varName) : null;
         }
 
-        /// <summary>Write an Udon program variable by name on the first UdonBehaviour on a GameObject.</summary>
+        /// <summary>
+        /// Write an Udon program variable by name. Writes to BOTH the Udon
+        /// heap AND the C# proxy field so that VRCSim.Call() and GetVar()
+        /// always see the same value. This matches how UdonSharp behaves in
+        /// production, where both stores are always in sync.
+        /// </summary>
         public static void SetVar(GameObject obj, string varName, object value)
+        {
+            var udon = SimReflection.GetUdonBehaviour(obj);
+            if (udon != null) SimReflection.SetProgramVariable(udon, varName, value);
+            // Sync C# proxy so Call() always sees the correct value
+            SimProxy.SetField(obj, varName, value, syncToHeap: false);
+        }
+
+        /// <summary>
+        /// Write ONLY to the Udon heap, leaving the C# proxy field unchanged.
+        /// Use this to simulate the gap between network data arriving and
+        /// OnDeserialization firing — i.e. when testing the handler itself.
+        /// Example:
+        ///   VRCSim.SetVarHeapOnly(obj, "gamePhase", 2);
+        ///   VRCSim.RunEvent(obj, "_onDeserialization"); // test the handler
+        /// </summary>
+        public static void SetVarHeapOnly(GameObject obj, string varName, object value)
         {
             var udon = SimReflection.GetUdonBehaviour(obj);
             if (udon != null) SimReflection.SetProgramVariable(udon, varName, value);
@@ -469,102 +510,6 @@ namespace VRCSim
                 RunEvent(obj, "_update");
         }
 
-        // ── Validation & Reporting ─────────────────────────────────
-
-        /// <summary>
-        /// Build a human-readable report of all players, ownership, and kinematic issues.
-        /// </summary>
-        public static string GetStateReport()
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("=== VRCSim State Report ===");
-            sb.AppendLine();
-
-            var pm = SimReflection.GetPlayerManager();
-            int masterId = pm != null ? SimReflection.GetMasterId(pm) : -1;
-
-            sb.AppendLine("PLAYERS:");
-            foreach (var player in VRCPlayerApi.AllPlayers)
-            {
-                bool isMaster = player.playerId == masterId;
-                bool isBot = _bots.Contains(player);
-                sb.AppendLine($"  [{player.playerId}] {player.displayName}" +
-                    $" | local={player.isLocal}" +
-                    $" | master={isMaster}" +
-                    $" | bot={isBot}");
-            }
-            sb.AppendLine();
-
-            var kinIssues = ValidateKinematic();
-            sb.AppendLine($"KINEMATIC ISSUES: {kinIssues.Count}");
-            foreach (var issue in kinIssues)
-                sb.AppendLine($"  {issue}");
-            sb.AppendLine();
-
-            sb.AppendLine("OBJECT OWNERSHIP:");
-            var syncs = UnityEngine.Object.FindObjectsByType<
-                VRC.SDK3.Components.VRCObjectSync>(
-                FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-            foreach (var sync in syncs)
-            {
-                var owner = Networking.GetOwner(sync.gameObject);
-                var rb = sync.GetComponent<Rigidbody>();
-                sb.AppendLine($"  {sync.gameObject.name}" +
-                    $" | owner={owner?.displayName ?? "none"}" +
-                    $" | kinematic={rb?.isKinematic}");
-            }
-
-            return sb.ToString();
-        }
-
-        /// <summary>
-        /// Validate expected synced var values on a GameObject.
-        /// </summary>
-        public static string ValidateVars(GameObject obj,
-            params (string varName, object expected)[] expectations)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine($"VALIDATION: {obj.name}");
-
-            var udon = SimReflection.GetUdonBehaviour(obj);
-            if (udon == null)
-            {
-                sb.AppendLine("  ERROR: No UdonBehaviour");
-                return sb.ToString();
-            }
-
-            bool allPass = true;
-            foreach (var (varName, expected) in expectations)
-            {
-                var actual = SimReflection.GetProgramVariable(udon, varName);
-                bool match = Equals(actual, expected);
-                if (!match) allPass = false;
-
-                sb.AppendLine($"  [{(match ? "PASS" : "FAIL")}] {varName}: " +
-                    $"actual={actual ?? "null"}, expected={expected ?? "null"}");
-            }
-
-            sb.AppendLine(allPass ? "  RESULT: ALL PASS" : "  RESULT: FAILURES DETECTED");
-            return sb.ToString();
-        }
-
-        /// <summary>
-        /// Validate expected synced var values and return true if all match.
-        /// Cheaper than the string version when you just need pass/fail.
-        /// </summary>
-        public static bool CheckVars(GameObject obj,
-            params (string varName, object expected)[] expectations)
-        {
-            var udon = SimReflection.GetUdonBehaviour(obj);
-            if (udon == null) return false;
-            foreach (var (varName, expected) in expectations)
-            {
-                var actual = SimReflection.GetProgramVariable(udon, varName);
-                if (!Equals(actual, expected)) return false;
-            }
-            return true;
-        }
-
         // ── Private Helpers ────────────────────────────────────────
 
         /// <summary>
@@ -620,7 +565,11 @@ namespace VRCSim
             foreach (var (udon, original) in swapped)
             {
                 try { SimReflection.SetProgramVariable(udon, "_localPlayer", original); }
-                catch { /* Best effort restore */ }
+                catch (Exception e)
+                {
+                    Debug.LogWarning(
+                        $"[VRCSim] RestoreLocalPlayerRefs: failed to restore {udon}: {e.Message}");
+                }
             }
         }
 

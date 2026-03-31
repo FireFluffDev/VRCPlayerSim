@@ -14,7 +14,7 @@ ROOT = Path(__file__).parent
 RUNTIME = ROOT / "Runtime"
 OUTPUT = ROOT / "API.md"
 
-SOURCE_FILES = ["VRCSim.cs", "SimNetwork.cs", "SimReflection.cs", "SimSnapshot.cs"]
+SOURCE_FILES = ["VRCSim.cs", "VRCSim.Testing.cs", "SimProxy.cs", "SimNetwork.cs", "SimReflection.cs", "SimSnapshot.cs"]
 
 SECTION_RE = re.compile(r"^//\s*\u2500\u2500\s*(.+?)\s*\u2500")
 SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.DOTALL)

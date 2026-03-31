@@ -37,6 +37,10 @@ namespace VRCSim
         /// </summary>
         public static void RunAsPlayer(VRCPlayerApi player, Action action)
         {
+            if (player == null || !player.IsValid())
+                throw new ArgumentException(
+                    "[VRCSim] RunAsPlayer: player is null or invalid (removed?)");
+
             var pm = SimReflection.GetPlayerManager();
             if (pm == null)
                 throw new InvalidOperationException(
@@ -152,7 +156,7 @@ namespace VRCSim
                         issues.Add(new KinematicIssue
                         {
                             ObjectName = sync.gameObject.name,
-                            ObjectPath = GetPath(sync.transform),
+                            ObjectPath = SimReflection.GetPath(sync.transform),
                             OwnerId = ownerId,
                             NonOwnerPlayerId = player.playerId,
                             IsKinematic = rb.isKinematic,
@@ -300,6 +304,60 @@ namespace VRCSim
                 SimReflection.RunEvent(udon, "_onNewMaster");
         }
 
+        // ── Sync Propagation ─────────────────────────────────────
+
+        /// <summary>
+        /// Simulate a full sync cycle: fire OnDeserialization from every
+        /// non-owner player's perspective. In real VRChat, after the owner
+        /// calls RequestSerialization(), all other clients receive the
+        /// synced data and fire OnDeserialization. This replicates that.
+        ///
+        /// ClientSim uses a single shared Udon heap, so the synced var
+        /// values are already "propagated" — we just need to fire the
+        /// OnDeserialization event from each non-owner's perspective.
+        /// </summary>
+        public static void SyncToAllClients(GameObject obj)
+        {
+            var owner = Networking.GetOwner(obj);
+            int ownerId = owner?.playerId ?? -1;
+
+            foreach (var player in VRCPlayerApi.AllPlayers)
+            {
+                if (player.playerId == ownerId) continue;
+                RunAsPlayer(player, () => SimulateDeserialization(obj));
+            }
+        }
+
+        /// <summary>
+        /// Fire _onPlayerLeft on ALL UdonBehaviours in the scene for a
+        /// specific player. Does NOT remove the player from the player list.
+        ///
+        /// Use this to test game logic's response to disconnection without
+        /// destroying the player object. For full removal (with player list
+        /// cleanup), use VRCSim.RemovePlayer instead.
+        /// </summary>
+        public static void FirePlayerLeftOnAll(VRCPlayerApi player)
+        {
+            // No catch-all: if a world script's _onPlayerLeft throws,
+            // that IS a bug and the test must fail visibly.
+            var udons = SimReflection.FindAllUdonBehaviours();
+            foreach (var udon in udons)
+                SimReflection.RunEventWithArgs(udon, "_onPlayerLeft", ("player", player));
+        }
+
+        /// <summary>
+        /// Fire _onPlayerJoined on ALL UdonBehaviours for a specific player.
+        /// Normally handled by ClientSim during SpawnRemotePlayer, but
+        /// useful for testing late-join scenarios or re-triggering join logic.
+        /// </summary>
+        public static void FirePlayerJoinedOnAll(VRCPlayerApi player)
+        {
+            // Same rationale as FirePlayerLeftOnAll.
+            var udons = SimReflection.FindAllUdonBehaviours();
+            foreach (var udon in udons)
+                SimReflection.RunEventWithArgs(udon, "_onPlayerJoined", ("player", player));
+        }
+
         // ── Network Event Routing ─────────────────────────────
 
         /// <summary>
@@ -353,17 +411,5 @@ namespace VRCSim
                 $"(should be {ShouldBeKinematic}) — path: {ObjectPath}";
         }
 
-        // ── Helpers ────────────────────────────────────────────────
-
-        private static string GetPath(Transform t)
-        {
-            var parts = new List<string>();
-            while (t != null)
-            {
-                parts.Insert(0, t.name);
-                t = t.parent;
-            }
-            return string.Join("/", parts);
-        }
     }
 }

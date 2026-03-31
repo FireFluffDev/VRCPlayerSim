@@ -12,6 +12,9 @@ namespace VRCSim
     /// </summary>
     public static class SimReflection
     {
+        // ── Per-UdonBehaviour caches ────────────────────────────────
+        private static readonly Dictionary<int, List<string>> _syncedVarNameCache = new();
+
         // ── Type cache ─────────────────────────────────────────────
         private static Type _clientSimMainType;
         private static Type _playerManagerType;
@@ -23,6 +26,11 @@ namespace VRCSim
         // ── ClientSimMain ──────────────────────────────────────────
         private static MethodInfo _spawnRemotePlayer;
         private static MethodInfo _removePlayer;
+        // Cached field-infos for singleton + player-manager access.
+        // Resolved once in Initialize() — live GetField() on every call
+        // is unnecessary reflection overhead.
+        private static FieldInfo _csInstanceField;
+        private static FieldInfo _csPlayerManagerField;
 
         // ── ClientSimPlayerManager fields ──────────────────────────
         private static FieldInfo _pmMasterId;
@@ -37,7 +45,8 @@ namespace VRCSim
         private static MethodInfo _handlerOnStationExit;
 
         // ── UdonBehaviour ──────────────────────────────────────────
-        private static MethodInfo _ubRunEvent;
+        private static MethodInfo _ubRunEvent;          // RunEvent(string)
+        private static MethodInfo _ubRunEventWithArgs;  // RunEvent(string, params ValueTuple<string,object>[])
         private static MethodInfo _ubGetProgramVariable;
         private static MethodInfo _ubTryGetProgramVariable;
         private static MethodInfo _ubSetProgramVariable;
@@ -120,17 +129,19 @@ namespace VRCSim
                 _ubSendCustomEvent = FindNonGenericMethod(
                     _udonBehaviourType, "SendCustomEvent", 1);
 
-                // RunEvent: find the overload with (string, params ValueTuple[])
+                // RunEvent: resolve BOTH overloads.
+                //   RunEvent(string)          — parameterless (_update, _fixedUpdate, etc.)
+                //   RunEvent(string, params ValueTuple<string,object>[]) — with args
+                //     (_onPlayerLeft, _onPlayerJoined, _onStationEntered, etc.)
                 foreach (var m in _udonBehaviourType.GetMethods(
                     BindingFlags.Public | BindingFlags.Instance))
                 {
                     if (m.Name != "RunEvent" || m.IsGenericMethod) continue;
                     var parms = m.GetParameters();
-                    if (parms.Length >= 1 && parms[0].ParameterType == typeof(string))
-                    {
+                    if (parms.Length == 1 && parms[0].ParameterType == typeof(string))
                         _ubRunEvent = m;
-                        break;
-                    }
+                    else if (parms.Length == 2 && parms[0].ParameterType == typeof(string))
+                        _ubRunEventWithArgs = m;
                 }
 
                 // ── Sync metadata (best-effort — not fatal if missing) ──
@@ -147,7 +158,15 @@ namespace VRCSim
                         BindingFlags.Public | BindingFlags.Instance);
                 }
 
-                // ── VRCPlayerApi ───────────────────────────────────
+                // ── ClientSimMain singleton + player-manager fields ────────
+                _csInstanceField = _clientSimMainType.GetField(
+                    "_instance",
+                    BindingFlags.NonPublic | BindingFlags.Static);
+                _csPlayerManagerField = _clientSimMainType.GetField(
+                    "_playerManager",
+                    BindingFlags.NonPublic | BindingFlags.Instance);
+
+                // ── VRCPlayerApi ───────────────────────────────────────────
                 _playerIsLocal = typeof(VRCPlayerApi).GetField(
                     "isLocal",
                     BindingFlags.Public | BindingFlags.Instance);
@@ -155,6 +174,8 @@ namespace VRCSim
                 // ── Validate critical members ──────────────────────
                 ValidateNotNull(_spawnRemotePlayer, "ClientSimMain.SpawnRemotePlayer");
                 ValidateNotNull(_removePlayer, "ClientSimMain.RemovePlayer");
+                ValidateNotNull(_csInstanceField, "ClientSimMain._instance");
+                ValidateNotNull(_csPlayerManagerField, "ClientSimMain._playerManager");
                 ValidateNotNull(_pmMasterId, "PlayerManager._masterID");
                 ValidateNotNull(_pmLocalPlayerId, "PlayerManager._localPlayerID");
                 ValidateNotNull(_pmLocalPlayer, "PlayerManager._localPlayer");
@@ -164,6 +185,7 @@ namespace VRCSim
                 ValidateNotNull(_ubGetProgramVariable, "UdonBehaviour.GetProgramVariable");
                 ValidateNotNull(_ubSetProgramVariable, "UdonBehaviour.SetProgramVariable");
                 ValidateNotNull(_ubSendCustomEvent, "UdonBehaviour.SendCustomEvent");
+                ValidateNotNull(_ubRunEvent, "UdonBehaviour.RunEvent");
                 ValidateNotNull(_playerIsLocal, "VRCPlayerApi.isLocal");
 
                 return true;
@@ -201,21 +223,11 @@ namespace VRCSim
         public static object GetPlayerManager()
         {
             var instance = GetClientSimInstance();
-            if (instance == null) return null;
-            var pmField = _clientSimMainType.GetField(
-                "_playerManager",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            return pmField?.GetValue(instance);
+            return instance == null ? null : _csPlayerManagerField?.GetValue(instance);
         }
 
         /// <summary>Get the ClientSimMain singleton instance.</summary>
-        public static object GetClientSimInstance()
-        {
-            var instanceField = _clientSimMainType.GetField(
-                "_instance",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            return instanceField?.GetValue(null);
-        }
+        public static object GetClientSimInstance() => _csInstanceField?.GetValue(null);
 
         // ── PlayerManager State ────────────────────────────────────
 
@@ -330,7 +342,37 @@ namespace VRCSim
         /// </summary>
         public static void RunEvent(Component udon, string eventName)
         {
-            _ubRunEvent?.Invoke(udon, new object[] { eventName });
+            // _ubRunEvent is validated in Initialize() — null here means Init was never called.
+            if (_ubRunEvent == null)
+            {
+                Debug.LogError("[VRCSim] RunEvent called before Init() — call VRCSim.Init() in test SetUp");
+                return;
+            }
+            _ubRunEvent.Invoke(udon, new object[] { eventName });
+        }
+
+        /// <summary>
+        /// Execute an Udon program event with named arguments.
+        /// Mirrors how VRChat passes parameters to lifecycle events:
+        ///   _onPlayerLeft     → ("player", VRCPlayerApi)
+        ///   _onPlayerJoined   → ("player", VRCPlayerApi)
+        ///   _onStationEntered → ("player", VRCPlayerApi)
+        /// Falls back to SetProgramVariable + RunEvent if the with-args
+        /// overload is unavailable (older UdonBehaviour builds).
+        /// </summary>
+        public static void RunEventWithArgs(Component udon, string eventName,
+            params (string, object)[] args)
+        {
+            if (_ubRunEventWithArgs != null)
+            {
+                _ubRunEventWithArgs.Invoke(udon, new object[] { eventName, args });
+            }
+            else
+            {
+                foreach (var (name, value) in args)
+                    SetProgramVariable(udon, name, value);
+                RunEvent(udon, eventName);
+            }
         }
 
         /// <summary>
@@ -339,6 +381,10 @@ namespace VRCSim
         /// </summary>
         public static List<string> GetSyncedVarNames(Component udon)
         {
+            int id = udon.GetInstanceID();
+            if (_syncedVarNameCache.TryGetValue(id, out var cached))
+                return cached;
+
             var names = new List<string>();
             if (_ubSyncMetadataTable == null || _syncTableGetAll == null)
                 return names;
@@ -352,6 +398,7 @@ namespace VRCSim
                 var name = _syncMetaName?.GetValue(meta) as string;
                 if (name != null) names.Add(name);
             }
+            _syncedVarNameCache[id] = names;
             return names;
         }
 
@@ -395,24 +442,43 @@ namespace VRCSim
                     "__0__onOwnershipRequest__ret");
                 return result is bool b ? b : true;
             }
-            catch
+            catch (Exception e)
             {
+                Debug.LogWarning(
+                    $"[VRCSim] FireOwnershipRequest: handler threw, defaulting to allow: {e.Message}");
                 return true;
             }
         }
 
         /// <summary>
         /// Fire OnOwnershipTransferred on an UdonBehaviour.
-        /// In VRChat, this fires after ownership has changed.
+        /// In VRChat, this fires after ownership has changed and the
+        /// new owner is passed as the "player" parameter.
         /// </summary>
         public static void FireOwnershipTransferred(Component udon,
             VRCPlayerApi newOwner)
         {
-            try
+            // VRChat passes the new owner as the "player" parameter.
+            // Use RunEventWithArgs so the UdonBehaviour receives it.
+            RunEventWithArgs(udon, "_onOwnershipTransferred", ("player", (object)newOwner));
+        }
+
+        // ── Scene Helpers ──────────────────────────────────────────
+
+        /// <summary>
+        /// Build the full hierarchy path of a Transform.
+        /// Shared by SimNetwork and SimSnapshot — lives here to avoid duplication.
+        /// </summary>
+        public static string GetPath(Transform t)
+        {
+            var parts = new List<string>();
+            while (t != null)
             {
-                RunEvent(udon, "_onOwnershipTransferred");
+                parts.Add(t.name);
+                t = t.parent;
             }
-            catch { /* Event may not exist on this UdonBehaviour */ }
+            parts.Reverse();
+            return string.Join("/", parts);
         }
 
         // ── Helpers ────────────────────────────────────────────────

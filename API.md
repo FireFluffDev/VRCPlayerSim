@@ -20,9 +20,10 @@ VRC Player Simulator — public API. Simulates multiplayer interactions on top o
 |-----------|-------------|
 | `VRCPlayerApi SpawnPlayer(string name)` | Spawn a remote player bot. Fires OnPlayerJoined on all UdonBehaviours. Returns the VRCPlayerApi for the new player. |
 | `void RemovePlayer(VRCPlayerApi player)` | Remove a bot player. Fires OnPlayerLeft on all UdonBehaviours. If the removed player was master, auto-transfers master to the next player and fires _onNewMaster — matching real VRChat behavior. |
-| `void RemoveAllPlayers()` | Remove all bots spawned in this session. |
+| `void RemoveAllPlayers()` | Remove all bots spawned in this session. Note: Does NOT fire OnPlayerLeft events. Use RemovePlayer() in a loop if you need disconnect event testing. |
 | `List<VRCPlayerApi> GetBots()` | Get all bots. |
-| `VRCPlayerApi GetBot(string name)` | Get a bot by name (partial match). |
+| `VRCPlayerApi GetBot(string name)` | Get a bot by exact display name. |
+| `VRCPlayerApi GetBotByPrefix(string prefix)` | Get first bot whose name contains the given prefix (substring match). |
 
 ### Movement
 
@@ -68,7 +69,8 @@ VRC Player Simulator — public API. Simulates multiplayer interactions on top o
 | Signature | Description |
 |-----------|-------------|
 | `object GetVar(GameObject obj, string varName)` | Read an Udon program variable by name from the first UdonBehaviour on a GameObject. |
-| `void SetVar(GameObject obj, string varName, object value)` | Write an Udon program variable by name on the first UdonBehaviour on a GameObject. |
+| `void SetVar(GameObject obj, string varName, object value)` | Write an Udon program variable by name. Writes to BOTH the Udon heap AND the C# proxy field so that VRCSim.Call() and GetVar() always see the same value. This matches how UdonSharp behaves in production, where both stores are always in sync. |
+| `void SetVarHeapOnly(GameObject obj, string varName, object value)` | Write ONLY to the Udon heap, leaving the C# proxy field unchanged. Use this to simulate the gap between network data arriving and OnDeserialization firing — i.e. when testing the handler itself. Example: VRCSim.SetVarHeapOnly(obj, "gamePhase", 2); VRCSim.RunEvent(obj, "_onDeserialization"); // test the handler |
 | `void SendEvent(GameObject obj, string eventName)` | Send a custom event to the first UdonBehaviour on a GameObject. |
 | `List<string> GetSyncedVarNames(GameObject obj)` | Get the names of all [UdonSynced] variables on a GameObject. |
 | `Dictionary<string, object> GetSyncedVars(GameObject obj)` | Get all synced variables and their current values. |
@@ -84,13 +86,100 @@ VRC Player Simulator — public API. Simulates multiplayer interactions on top o
 | `void RunUpdate(GameObject obj)` | Tick one frame of the UdonBehaviour's Update loop. |
 | `void RunUpdate(GameObject obj, int frames)` | Tick multiple frames of the UdonBehaviour's Update loop. Equivalent to calling RunUpdate in a loop, but reads cleaner in tests. |
 
+## `VRCSim.VRCSim`
+
 ### Validation & Reporting
 
 | Signature | Description |
 |-----------|-------------|
-| `string GetStateReport()` | Build a human-readable report of all players, ownership, and kinematic issues. |
-| `string ValidateVars(GameObject obj, params (string varName, object expected)[] expectations)` | Validate expected synced var values on a GameObject. |
-| `bool CheckVars(GameObject obj, params (string varName, object expected)[] expectations)` | Validate expected synced var values and return true if all match. Cheaper than the string version when you just need pass/fail. |
+| `string GetStateReport()` | Build a human-readable report of all players, ownership, and kinematic issues. Useful as a last line in any test. |
+| `string ValidateVars(GameObject obj, params (string varName, object expected)[] expectations)` | Validate expected synced var values on a GameObject. Returns a formatted pass/fail report string. |
+| `bool CheckVars(GameObject obj, params (string varName, object expected)[] expectations)` | Validate expected synced var values. Returns true only if all expectations match. Cheaper than ValidateVars when you just need a pass/fail bool. |
+
+### Batch Variable Access
+
+| Signature | Description |
+|-----------|-------------|
+| `void SetVars(GameObject obj, params (string name, object value)[] vars)` | Set multiple Udon program variables on a single object in one call. Each write goes to BOTH heap and proxy (same as SetVar). Reduces boilerplate in test setup. |
+
+### Physics Simulation
+
+| Signature | Description |
+|-----------|-------------|
+| `void RunFixedUpdate(GameObject obj)` | Tick one frame of FixedUpdate on a specific object. Required for physics-dependent logic (ball elimination via Y-threshold, collision knockback, etc.). |
+| `void RunFixedUpdate(GameObject obj, int frames)` | Tick multiple frames of FixedUpdate on a specific object. |
+
+### Game Loop Simulation
+
+| Signature | Description |
+|-----------|-------------|
+| `void TickAll(int frames = 1)` | Fire _update on ALL active UdonBehaviours in the scene. Simulates one full frame of the VRChat game loop. |
+| `void TickFixedAll(int frames = 1)` | Fire _fixedUpdate on ALL active UdonBehaviours in the scene. Simulates one full physics tick of the VRChat game loop. |
+
+### Sync Propagation
+
+| Signature | Description |
+|-----------|-------------|
+| `void SyncToAll(GameObject obj)` | Simulate a full sync cycle: fire OnDeserialization from every non-owner player's perspective. In real VRChat, after RequestSerialization(), all non-owner clients receive the synced data and fire OnDeserialization. ClientSim shares a single Udon heap so values are already present — this just fires the event from each perspective. |
+
+### Parameterized Events
+
+| Signature | Description |
+|-----------|-------------|
+| `void RunEventWithArgs(GameObject obj, string eventName, params (string name, object value)[] args)` | Fire an Udon event with named arguments on a specific object. Mirrors how VRChat passes parameters to lifecycle events. Usage: VRCSim.RunEventWithArgs(gmObj, "_onPlayerLeft", ("player", bobApi)); |
+
+### Station Query
+
+| Signature | Description |
+|-----------|-------------|
+| `bool IsPlayerInStation(VRCPlayerApi player, GameObject stationObj)` | Check if a specific player is currently seated in a station. |
+
+### Method Invocation
+
+| Signature | Description |
+|-----------|-------------|
+| `object Call(GameObject obj, string methodName, params object[] args)` | Call any method (including private) on the UdonSharpBehaviour proxy found on a GameObject. Auto-discovers the proxy. Returns object; use CallAs for typed return values. |
+| `object Call(Component behaviour, string methodName, params object[] args)` | Call any method (including private) on a Component directly. Use the GameObject overload unless you already have the component. |
+
+### State Reading
+
+| Signature | Description |
+|-----------|-------------|
+| `object GetField(GameObject obj, string fieldName)` | Read a C# proxy field from the UdonSharpBehaviour found on a GameObject. Use after Call() to assert on state the method changed. Use GetVar() for synced variables set by SetVar or deserialization. |
+| `VarState GetBoth(GameObject obj, string varName)` | Read a variable from BOTH the Udon heap and the C# proxy in one call. Returns a VarState exposing .Heap, .Proxy, .InSync, .HeapAs, .ProxyAs. Example -- assert heap after RunEvent, then confirm both stores agree: VRCSim.RunEvent(gmObj, "_startGame"); var state = VRCSim.GetBoth(gmObj, "gamePhase"); Assert.AreEqual(1, state.HeapAs(0)); // VM ran, heap has truth Assert.IsTrue(state.InSync); // proxy should have caught up Example -- detect divergence after SetVarHeapOnly (intentional): VRCSim.SetVarHeapOnly(gmObj, "gamePhase", 2); Assert.IsFalse(VRCSim.GetBoth(gmObj, "gamePhase").InSync); |
+
+### Player Events (without removal)
+
+| Signature | Description |
+|-----------|-------------|
+| `void SimulatePlayerLeft(VRCPlayerApi player)` | Fire OnPlayerLeft on ALL UdonBehaviours for a player WITHOUT removing them from the player list. Use this to test game logic's DC response without destroying the player object. For full removal, use VRCSim.RemovePlayer instead. |
+| `void SimulatePlayerJoined(VRCPlayerApi player)` | Fire OnPlayerJoined on ALL UdonBehaviours for a player. Useful for late-join scenarios or re-triggering join logic. |
+
+## `VRCSim.SimProxy`
+
+Proxy-level reflection for UdonSharpBehaviour C# objects. UdonSharp creates a dual state for every field: the C# proxy field and the Udon program heap variable. In production, UdonSharp keeps them in sync. In tests, they can diverge because: - VRCSim.SetVar writes to the Udon heap only - C# methods called via reflection read C# proxy fields - The proxy's Start() body doesn't run (Udon VM handles it) SimProxy bridges this gap with three capabilities: 1. InitProxy — sync Udon heap → C# proxy fields (replaces manual ForceInit) 2. Field access — read/write C# proxy fields with type coercion 3. Method invocation — call any method (including private) with caching
+
+### General
+
+| Signature | Description |
+|-----------|-------------|
+| `int InitProxy(Component behaviour)` | Initialize the C# proxy fields of an UdonSharpBehaviour by copying values from the Udon program heap. The Udon VM runs _start and populates the heap, but the C# proxy's Start() body never executes. This copies heap values into the corresponding C# fields so proxy methods work correctly in tests. Always sets _localPlayer = Networking.LocalPlayer (universal pattern). Returns the count of fields successfully synced. |
+| `int InitProxyDeep(Component behaviour)` | Initialize proxy fields AND resolve common scene references that Start() typically sets via transform.Find / GetComponent / GetComponentInChildren. This handles the most common UdonSharp patterns: _localPlayer = Networking.LocalPlayer (always) field of type Transform → transform.Find(fieldNameWithout_) or GetComponentInChildren field of type Component → GetComponentInChildren(fieldType) field of type Renderer → GetComponentInChildren&lt;Renderer&gt;(true).transform Returns count of fields successfully initialized. |
+| `void SetField(Component behaviour, string fieldName, object value, bool syncToHeap = true)` | Set a C# proxy field on an UdonSharpBehaviour. Handles type coercion (int→float, float→int, int→bool). Optionally syncs to Udon heap for consistency. |
+| `object GetField(Component behaviour, string fieldName)` | Read a C# proxy field from an UdonSharpBehaviour. Returns null if the field doesn't exist. |
+| `void SetFields(Component behaviour, params (string name, object value)[] fields)` | Set multiple fields at once. Reduces boilerplate in test setup. |
+| `bool HasField(Component behaviour, string fieldName)` | Check if a field exists on the C# proxy type. |
+| `object Call(Component behaviour, string methodName, params object[] args)` | Call a method (including private) on a Component. Searches declared methods first, then inherited. Caches MethodInfo per type for subsequent calls. |
+| `bool HasMethod(Component behaviour, string methodName, int paramCount = 0)` | Check if a method exists on the type (including private). |
+| `FieldInfo ResolveField(Type type, string name)` | Resolve a FieldInfo by name, searching the full type hierarchy. Results are cached per type. |
+| `MethodInfo ResolveMethod(Type type, string methodName, object[] args)` | Resolve a MethodInfo by name and actual arguments. First tries exact parameter type match, then falls back to count-only match. |
+| `MethodInfo ResolveMethod(Type type, string methodName, int paramCount)` | Backward-compatible overload for callers passing just a count. |
+
+### Value coercion
+
+| Signature | Description |
+|-----------|-------------|
+| `object CoerceValue(object value, Type targetType)` | Coerce a value to match the target field type. Handles the common UdonSharp mismatches: int → float, double → float, float → int, int → bool Returns null if coercion is not possible. |
 
 ## `VRCSim.SimNetwork`
 
@@ -130,6 +219,14 @@ Simulates VRChat networking rules that ClientSim skips: - Perspective swapping (
 | Signature | Description |
 |-----------|-------------|
 | `void SimulateMasterTransfer(VRCPlayerApi newMaster)` | Simulate master transfer to a new player. Changes the master ID and fires _onNewMaster on all UdonBehaviours. |
+
+### Sync Propagation
+
+| Signature | Description |
+|-----------|-------------|
+| `void SyncToAllClients(GameObject obj)` | Simulate a full sync cycle: fire OnDeserialization from every non-owner player's perspective. In real VRChat, after the owner calls RequestSerialization(), all other clients receive the synced data and fire OnDeserialization. This replicates that. ClientSim uses a single shared Udon heap, so the synced var values are already "propagated" — we just need to fire the OnDeserialization event from each non-owner's perspective. |
+| `void FirePlayerLeftOnAll(VRCPlayerApi player)` | Fire _onPlayerLeft on ALL UdonBehaviours in the scene for a specific player. Does NOT remove the player from the player list. Use this to test game logic's response to disconnection without destroying the player object. For full removal (with player list cleanup), use VRCSim.RemovePlayer instead. |
+| `void FirePlayerJoinedOnAll(VRCPlayerApi player)` | Fire _onPlayerJoined on ALL UdonBehaviours for a specific player. Normally handled by ClientSim during SpawnRemotePlayer, but useful for testing late-join scenarios or re-triggering join logic. |
 
 ### Network Event Routing
 
@@ -207,10 +304,17 @@ Cached reflection accessors for ClientSim internals. Isolated here so SDK versio
 | `Component[] GetUdonBehaviours(GameObject obj)` | Get all UdonBehaviour components on a GameObject. |
 | `Component GetUdonBehaviour(GameObject obj)` | Get the first UdonBehaviour component on a GameObject. |
 | `void RunEvent(Component udon, string eventName)` | Execute an Udon program event (e.g. "_update", "_onDeserialization"). Unlike SendCustomEvent, this goes through the program runner. |
+| `void RunEventWithArgs(Component udon, string eventName, params (string, object)[] args)` | Execute an Udon program event with named arguments. Mirrors how VRChat passes parameters to lifecycle events: _onPlayerLeft → ("player", VRCPlayerApi) _onPlayerJoined → ("player", VRCPlayerApi) _onStationEntered → ("player", VRCPlayerApi) Falls back to SetProgramVariable + RunEvent if the with-args overload is unavailable (older UdonBehaviour builds). |
 | `List<string> GetSyncedVarNames(Component udon)` | Get the names of all [UdonSynced] variables on an UdonBehaviour. Returns empty list if sync metadata is unavailable. |
 | `Component[] FindAllUdonBehaviours()` | Find ALL UdonBehaviours in the scene (active only). |
 | `bool FireOwnershipRequest(Component udon, VRCPlayerApi requestingPlayer, VRCPlayerApi requestedOwner)` | Fire OnOwnershipRequest on an UdonBehaviour. Returns true if transfer is allowed (or if the event doesn't exist). Uses Udon's standard event parameter symbols: onOwnershipRequestRequester, onOwnershipRequestNewOwner. |
-| `void FireOwnershipTransferred(Component udon, VRCPlayerApi newOwner)` | Fire OnOwnershipTransferred on an UdonBehaviour. In VRChat, this fires after ownership has changed. |
+| `void FireOwnershipTransferred(Component udon, VRCPlayerApi newOwner)` | Fire OnOwnershipTransferred on an UdonBehaviour. In VRChat, this fires after ownership has changed and the new owner is passed as the "player" parameter. |
+
+### Scene Helpers
+
+| Signature | Description |
+|-----------|-------------|
+| `string GetPath(Transform t)` | Build the full hierarchy path of a Transform. Shared by SimNetwork and SimSnapshot — lives here to avoid duplication. |
 
 ## `VRCSim.SimSnapshot`
 
